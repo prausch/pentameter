@@ -78,6 +78,7 @@ const (
 	objTypePump    = "PUMP"
 	objTypeHeater  = "HEATER"
 	objTypeCircGrp = "CIRCGRP"
+	objTypeChem      = "CHEM"
 
 	// Reconnect retry delay.
 	reconnectRetryDelay = 5 * time.Second
@@ -214,6 +215,46 @@ var (
 			Help: "Feature status (0=off, 1=on, 2=freeze protection active)",
 		},
 		[]string{"feature", "name", "subtyp"},
+	)
+
+	chemPH = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "chem_ph",
+			Help: "Current pH level from IntelliChem",
+			 },
+			[]string{"id", "name"},
+	)
+
+	chemORP = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "chem_orp_mv",
+			Help: "Current ORP level in millivolts from IntelliChem",
+			 },
+			[]string{"id", "name"},
+	)
+
+	chemSalt = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "chem_salt_ppm",
+			Help: "Current salt level in PPM from IntelliChem",
+			 },
+			[]string{"id", "name"},
+	)
+
+	chemQuality = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "chem_quality",
+			Help: "Pentair water balance index from IntelliChem",
+			 },
+			[]string{"id", "name"},
+	)
+
+	chemAlarm = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "chem_alarm",
+			Help: "IntelliChem alarm status (0=clear, 1=triggered)",
+			 },
+			[]string{"id", "name", "alarm"},
 	)
 )
 
@@ -697,6 +738,8 @@ func (pm *PoolMonitor) processPushObject(obj ObjectData) {
 		pm.handleHeaterPush(obj, name)
 	case objTypeCircGrp:
 		pm.handleCircGrpPush(obj)
+	case objTypeChem:
+		pm.handleChemPush(obj, name)
 	default:
 		pm.handleUnknownPush(obj)
 	}
@@ -740,6 +783,12 @@ func (pm *PoolMonitor) handleCircGrpPush(obj ObjectData) {
 	use := obj.Params["USE"]
 	log.Printf("PUSH: CircGrp %s/%s act=%s use=%s",
 		groupName, circuitName, act, use)
+}
+
+func (pm *PoolMonitor) handleChemPush(obj ObjectData, name string) {
+	pm.processIntelliChemObject(obj)
+	log.Printf("PUSH: IntelliChem %s: pH=%s ORP=%s salt=%s quality=%s",
+		name, obj.Params["PHVAL"], obj.Params["ORPVAL"], obj.Params["SALT"], obj.Params["QUALTY"])
 }
 
 func (pm *PoolMonitor) handleUnknownPush(obj ObjectData) {
@@ -789,6 +838,11 @@ func (pm *PoolMonitor) GetAllEquipmentStatus(_ context.Context) error {
 	// Get thermal equipment status
 	if err := pm.getThermalStatus(); err != nil {
 		return fmt.Errorf("failed to get thermal status: %w", err)
+	}
+
+	// Get IntelliChem data
+	if err := pm.getIntelliChemData(); err != nil {
+		return fmt.Errorf("failed to get IntelliChem data: %w", err)
 	}
 
 	// In listen mode, query circuit groups and ALL objects to discover unknown equipment
@@ -1072,6 +1126,108 @@ func (pm *PoolMonitor) getSensorTemperatures() error {
 	}
 
 	return nil
+}
+
+// chemAlarmMap maps IntelliCenter alarm param names to friendly metric labels.
+var chemAlarmMap = map[string]string{
+	"PHLO":  "ph_low",
+	"PHHI":  "ph_high",
+	"ORPLO": "orp_low",
+	"ORPHI": "orp_high",
+	"FLOW":  "flow",
+	"PROBE": "probe",
+}
+
+func (pm *PoolMonitor) getIntelliChemData() error {
+	messageID := fmt.Sprintf("chem-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%nanosecondMod)
+
+	req := IntelliCenterRequest{
+		MessageID: messageID,
+		Command:     "GetParamList",
+		Condition:   "OBJTYP=CHEM",
+		ObjectList: []ObjectQuery{
+			{
+				ObjName: "INCR",
+				Keys:      []string{"SNAME", "STATUS", "PHVAL", "ORPVAL", "SALT", "QUALTY", "PHLO", "PHHI", "ORPLO", "ORPHI", "FLOW", "PROBE"},
+			},
+		},
+	}
+
+	pm.pendingRequests[messageID] = time.Now()
+
+	if err := pm.conn.WriteJSON(req); err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to send IntelliChem request: %w", err)
+	}
+
+	resp, err := pm.readResponseWithPushHandling(messageID)
+	if err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to read IntelliChem response: %w", err)
+	}
+
+	pm.validateResponse(messageID)
+
+	if resp.Response != "200" {
+		return fmt.Errorf("IntelliChem API request failed with response: %s", resp.Response)
+	}
+
+	for _, obj := range resp.ObjectList {
+		pm.processIntelliChemObject(obj)
+	}
+
+	return nil
+}
+
+func (pm *PoolMonitor) processIntelliChemObject(obj ObjectData) {
+	name := obj.Params["SNAME"]
+	if name == "" {
+		name = obj.ObjName
+	}
+
+	phStr := obj.Params["PHVAL"]
+	if phStr != "" {
+		if v, err := strconv.ParseFloat(phStr, 64); err == nil {
+			chemPH.WithLabelValues(obj.ObjName, name).Set(v)
+		}
+	}
+
+	orpStr := obj.Params["ORPVAL"]
+	if orpStr != "" {
+		if v, err := strconv.ParseFloat(orpStr, 64); err == nil {
+			chemORP.WithLabelValues(obj.ObjName, name).Set(v)
+		}
+	}
+
+	saltStr := obj.Params["SALT"]
+	if saltStr != "" {
+		if v, err := strconv.ParseFloat(saltStr, 64); err == nil {
+			chemSalt.WithLabelValues(obj.ObjName, name).Set(v)
+		}
+	}
+
+	qualityStr := obj.Params["QUALTY"]
+	if qualityStr != "" {
+		if v, err := strconv.ParseFloat(qualityStr, 64); err == nil {
+			chemQuality.WithLabelValues(obj.ObjName, name).Set(v)
+		}
+	}
+
+	// Process alarm flags
+	for param, label := range chemAlarmMap {
+		valStr := obj.Params[param]
+		if valStr == "" {
+			continue
+		}
+		v := 0.0
+		if valStr == "1" || strings.EqualFold(valStr, "ON") || strings.EqualFold(valStr, "TRUE") {
+			v = 1.0
+		}
+		chemAlarm.WithLabelValues(obj.ObjName, name, label).Set(v)
+	}
+
+	pm.logIfNotListeningf("Updated IntelliChem %s (%s): pH=%s ORP=%s salt=%s quality=%s",
+		name, obj.ObjName, obj.Params["PHVAL"], obj.Params["ORPVAL"], obj.Params["SALT"], obj.Params["QUALTY"])
 }
 
 func (pm *PoolMonitor) getPumpData() error {
@@ -2378,6 +2534,11 @@ func createPrometheusRegistry() *prometheus.Registry {
 	registry.MustRegister(thermalLowSetpoint)
 	registry.MustRegister(thermalHighSetpoint)
 	registry.MustRegister(featureStatus)
+	registry.MustRegister(chemPH)
+	registry.MustRegister(chemORP)
+	registry.MustRegister(chemSalt)
+	registry.MustRegister(chemQuality)
+	registry.MustRegister(chemAlarm)
 	return registry
 }
 
