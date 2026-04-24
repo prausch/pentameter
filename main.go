@@ -158,6 +158,22 @@ var (
 		[]string{"pump", "name"},
 	)
 
+	pumpGPM = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "pump_gpm",
+			Help: "Current pump flow rate in gallons per minute",
+			},
+				[]string{"pump", "name"},
+	)
+
+	pumpWatts = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "pump_watts",
+			Help: "Current pump power consumption in watts",
+			},
+				[]string{"pump", "name"},
+	)
+
 	circuitStatus = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "circuit_status",
@@ -700,8 +716,8 @@ func (pm *PoolMonitor) handlePumpPush(obj ObjectData, name string) {
 	if err := pm.processPumpObject(obj, 0); err != nil {
 		log.Printf("PUSH: %s pump error: %v", name, err)
 	} else {
-		log.Printf("PUSH: %s rpm=%s watts=%s status=%s",
-			name, obj.Params["RPM"], obj.Params["PWR"], obj.Params["STATUS"])
+		log.Printf("PUSH: %s rpm=%s gpm=%s watts=%s status=%s",
+			name, obj.Params["RPM"], obj.Params["GPM"], obj.Params["PWR"], obj.Params["STATUS"])
 	}
 }
 
@@ -1503,7 +1519,7 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 		ObjectList: []ObjectQuery{
 			{
 				ObjName: "INCR",
-				Keys:    []string{"SNAME", "STATUS", "RPM", "WATTS", "GPM", "SPEED"},
+				Keys:    []string{"SNAME", "STATUS", "RPM", "PWR", "GPM", "SPEED"},
 			},
 		},
 	}
@@ -1535,26 +1551,49 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 func (pm *PoolMonitor) processPumpObject(obj ObjectData, responseTime time.Duration) error {
 	name := obj.Params["SNAME"]
 	rpmStr := obj.Params["RPM"]
+	gpmStr := obj.Params["GPM"]
+	wattsStr := obj.Params["PWR"]
 	status := obj.Params["STATUS"]
 
-	if rpmStr == "" || name == "" {
+	if name == "" {
 		return nil
 	}
 
-	rpm, err := strconv.ParseFloat(rpmStr, 64)
-	if err != nil {
-		log.Printf("Failed to parse RPM %s for pump %s: %v", rpmStr, name, err)
-		return fmt.Errorf("failed to parse RPM %s for pump %s: %w", rpmStr, name, err)
+	if rpmStr != "" {
+		rpm, err := strconv.ParseFloat(rpmStr, 64)
+		if err != nil {
+			log.Printf("Failed to parse RPM %s for pump %s: %v", rpmStr, name, err)
+			return fmt.Errorf("failed to parse RPM %s for pump %s: %w", rpmStr, name, err)
+		}
+		pumpRPM.WithLabelValues(obj.ObjName, name).Set(rpm)
+		pm.trackPumpRPM(name, rpm, obj)
 	}
 
-	pumpRPM.WithLabelValues(obj.ObjName, name).Set(rpm)
-	pm.trackPumpRPM(name, rpm, obj)
-	pm.logPumpUpdate(name, obj.ObjName, rpm, status, responseTime)
+	if gpmStr != "" {
+		gpm, err := strconv.ParseFloat(gpmStr, 64)
+		if err != nil {
+			log.Printf("Failed to parse GPM %s for pump %s: %v", gpmStr, name, err)
+		} else {
+			pumpGPM.WithLabelValues(obj.ObjName, name).Set(gpm)
+		}
+	}
+
+	if wattsStr != "" {
+		watts, err := strconv.ParseFloat(wattsStr, 64)
+		if err != nil {
+			log.Printf("Failed to parse watts %s for pump %s: %v", wattsStr, name, err)
+		} else {
+			pumpWatts.WithLabelValues(obj.ObjName, name).Set(watts)
+		}
+	}
+
+	pm.logPumpUpdate(name, obj.ObjName, rpmStr, gpmStr, wattsStr, status, responseTime)
 	return nil
 }
 
-func (pm *PoolMonitor) logPumpUpdate(name, objName string, rpm float64, status string, responseTime time.Duration) {
-	pm.logIfNotListeningf("Updated pump RPM: %s (%s) = %.0f RPM (Status: %s) [ResponseTime: %v]", name, objName, rpm, status, responseTime)
+func (pm *PoolMonitor) logPumpUpdate(name, objName, rpmStr, gpmStr, wattsStr, status string, responseTime time.Duration) {
+	pm.logIfNotListeningf("Updated pump: %s (%s) = %s RPM, %s GPM, %s W (Status: %s) [ResponseTime: %v]",
+		name, objName, rpmStr, gpmStr, wattsStr, status, responseTime)
 }
 
 func (pm *PoolMonitor) IsHealthy(_ context.Context) bool {
@@ -2267,6 +2306,8 @@ func createPrometheusRegistry() *prometheus.Registry {
 	registry.MustRegister(connectionFailure)
 	registry.MustRegister(lastRefreshTimestamp)
 	registry.MustRegister(pumpRPM)
+	registry.MustRegister(pumpGPM)
+	registry.MustRegister(pumpWatts)
 	registry.MustRegister(circuitStatus)
 	registry.MustRegister(thermalStatus)
 	registry.MustRegister(thermalLowSetpoint)
