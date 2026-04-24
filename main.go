@@ -766,6 +766,11 @@ func (pm *PoolMonitor) GetAllEquipmentStatus(_ context.Context) error {
 		return fmt.Errorf("failed to get air temperature: %w", err)
 	}
 
+	// Get sensor temperatures (solar collector, water return)
+	if err := pm.getSensorTemperatures(); err != nil {
+		return fmt.Errorf("failed to get sensor temperatures: %w", err)
+	}
+
 	// Get pump data
 	if err := pm.getPumpData(); err != nil {
 		return fmt.Errorf("failed to get pump data: %w", err)
@@ -1003,6 +1008,66 @@ func (pm *PoolMonitor) getAirTemperature() error {
 			airTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
 			pm.trackAirTemp(tempFahrenheit, obj)
 			pm.logIfNotListeningf("Updated air temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
+		}
+	}
+
+	return nil
+}
+
+func (pm *PoolMonitor) getSensorTemperatures() error {
+	messageID := fmt.Sprintf("sensor-temp-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%nanosecondMod)
+
+	req := IntelliCenterRequest{
+		MessageID: messageID,
+		Command:    "GetParamList",
+		Condition:  "",
+		ObjectList: []ObjectQuery{
+			{
+				ObjName: "SSS11",
+				Keys:    []string{"SNAME", "STATUS", "PROBE", "SUBTYP"},
+			},
+			{
+				ObjName: "SSW11",
+				Keys:    []string{"SNAME", "STATUS", "PROBE", "SUBTYP"},
+			},
+		},
+	}
+
+	pm.pendingRequests[messageID] = time.Now()
+
+	if err := pm.conn.WriteJSON(req); err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to send sensor temp request: %w", err)
+	}
+
+	resp, err := pm.readResponseWithPushHandling(messageID)
+	if err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to read sensor temp response: %w", err)
+	}
+
+	pm.validateResponse(messageID)
+
+	if resp.Response != "200" {
+		return fmt.Errorf("sensor temp API request failed with response: %s", resp.Response)
+	}
+
+	for _, obj := range resp.ObjectList {
+		name := obj.Params["SNAME"]
+		tempStr := obj.Params["PROBE"]
+		subtype := obj.Params["SUBTYP"]
+		status := obj.Params["STATUS"]
+
+		if tempStr != "" && name != "" {
+			tempFahrenheit, err := strconv.ParseFloat(tempStr, 64)
+			if err != nil {
+				log.Printf("Failed to parse sensor temperature %s for %s: %v", tempStr, name, err)
+				continue
+			}
+
+			airTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
+			pm.trackAirTemp(tempFahrenheit, obj)
+			pm.logIfNotListeningf("Updated sensor temperature: %s (%s) = %.1f°F (Status: %s)", name, obj.ObjName, tempFahrenheit, status)
 		}
 	}
 
