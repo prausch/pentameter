@@ -2540,6 +2540,8 @@ func (pm *PoolMonitor) trackUnknownEquipment(obj ObjectData) {
 		trackingValue = fmt.Sprintf("%s/%s:%s", objType, subtype, status)
 	}
 
+	pm.outputRawObjectData(obj)
+
 	prevValue, exists := pm.previousState.UnknownEquip[obj.ObjName]
 
 	// Log equipment changes with appropriate format
