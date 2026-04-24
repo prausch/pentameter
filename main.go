@@ -79,6 +79,8 @@ const (
 	objTypeHeater  = "HEATER"
 	objTypeCircGrp = "CIRCGRP"
 	objTypeChem      = "CHEM"
+	objTypeValve        = "VALVE"
+	objTypeSchedule     = "SCHED"
 
 	// Reconnect retry delay.
 	reconnectRetryDelay = 5 * time.Second
@@ -256,6 +258,22 @@ var (
 			 },
 			[]string{"id", "name", "alarm"},
 	)
+
+	valvePosition = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "valve_position",
+			Help: "Valve position (0=A, 1=B)",
+			  },
+				[]string{"id", "name"},
+		)
+
+	scheduleEnabled = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "schedule_enabled",
+			Help: "Schedule enabled state (0=disabled, 1=enabled)",
+			  },
+				[]string{"id", "name"},
+		)
 )
 
 type PoolMonitor struct {
@@ -740,6 +758,10 @@ func (pm *PoolMonitor) processPushObject(obj ObjectData) {
 		pm.handleCircGrpPush(obj)
 	case objTypeChem:
 		pm.handleChemPush(obj, name)
+	case objTypeValve:
+		pm.handleValvePush(obj, name)
+	case objTypeSchedule:
+		pm.handleSchedulePush(obj, name)
 	default:
 		pm.handleUnknownPush(obj)
 	}
@@ -789,6 +811,16 @@ func (pm *PoolMonitor) handleChemPush(obj ObjectData, name string) {
 	pm.processIntelliChemObject(obj)
 	log.Printf("PUSH: IntelliChem %s: pH=%s ORP=%s salt=%s quality=%s",
 		name, obj.Params["PHVAL"], obj.Params["ORPVAL"], obj.Params["SALT"], obj.Params["QUALTY"])
+}
+
+func (pm *PoolMonitor) handleValvePush(obj ObjectData, name string) {
+	pm.processValveObject(obj)
+	log.Printf("PUSH: valve %s position=%s", name, obj.Params["ACT"])
+}
+
+func (pm *PoolMonitor) handleSchedulePush(obj ObjectData, name string) {
+	pm.processScheduleObject(obj)
+	log.Printf("PUSH: schedule %s enabled=%s", name, obj.Params["ACT"])
 }
 
 func (pm *PoolMonitor) handleUnknownPush(obj ObjectData) {
@@ -843,6 +875,16 @@ func (pm *PoolMonitor) GetAllEquipmentStatus(_ context.Context) error {
 	// Get IntelliChem data
 	if err := pm.getIntelliChemData(); err != nil {
 		return fmt.Errorf("failed to get IntelliChem data: %w", err)
+	}
+
+	// Get valve positions
+	if err := pm.getValveData(); err != nil {
+		return fmt.Errorf("failed to get valve data: %w", err)
+	}
+
+	// Get schedule states
+	if err := pm.getScheduleData(); err != nil {
+		return fmt.Errorf("failed to get schedule data: %w", err)
 	}
 
 	// In listen mode, query circuit groups and ALL objects to discover unknown equipment
@@ -1228,6 +1270,135 @@ func (pm *PoolMonitor) processIntelliChemObject(obj ObjectData) {
 
 	pm.logIfNotListeningf("Updated IntelliChem %s (%s): pH=%s ORP=%s salt=%s quality=%s",
 		name, obj.ObjName, obj.Params["PHVAL"], obj.Params["ORPVAL"], obj.Params["SALT"], obj.Params["QUALTY"])
+}
+
+func (pm *PoolMonitor) getValveData() error {
+	messageID := fmt.Sprintf("valves-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%nanosecondMod)
+
+	req := IntelliCenterRequest{
+		MessageID: messageID,
+		Command:     "GetParamList",
+		Condition:    "OBJTYP=VALVE",
+		ObjectList: []ObjectQuery{
+				{
+				ObjName: "INCR",
+				Keys:       []string{"SNAME", "ACT", "STATUS"},
+				},
+			},
+	}
+
+	pm.pendingRequests[messageID] = time.Now()
+
+	if err := pm.conn.WriteJSON(req); err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to send valve request: %w", err)
+	}
+
+	resp, err := pm.readResponseWithPushHandling(messageID)
+	if err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to read valve response: %w", err)
+	}
+
+	pm.validateResponse(messageID)
+
+	if resp.Response != "200" {
+		return fmt.Errorf("valve API request failed with response: %s", resp.Response)
+	}
+
+	for _, obj := range resp.ObjectList {
+		pm.processValveObject(obj)
+	}
+
+	return nil
+}
+
+func (pm *PoolMonitor) processValveObject(obj ObjectData) {
+	name := obj.Params["SNAME"]
+	if name == "" {
+		name = obj.ObjName
+	}
+
+	act := obj.Params["ACT"]
+	if act == "" {
+		return
+	}
+
+	// Map ACT values: "A"→0, "B"→1, numeric strings pass through
+	pos := 0.0
+	if act == "A" {
+		pos = 0.0
+	} else if act == "B" {
+		pos = 1.0
+	} else {
+		if v, err := strconv.ParseFloat(act, 64); err == nil {
+			pos = v
+			}
+		}
+
+	valvePosition.WithLabelValues(obj.ObjName, name).Set(pos)
+	pm.logIfNotListeningf("Updated valve: %s (%s) position=%s [%.0f]", name, obj.ObjName, act, pos)
+}
+
+func (pm *PoolMonitor) getScheduleData() error {
+	messageID := fmt.Sprintf("schedule-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%nanosecondMod)
+
+	req := IntelliCenterRequest{
+		MessageID: messageID,
+		Command:     "GetParamList",
+		Condition:    "OBJTYP=SCHED",
+		ObjectList: []ObjectQuery{
+				{
+				ObjName: "INCR",
+				Keys:       []string{"SNAME", "ACT", "STATUS"},
+				},
+			},
+	}
+
+	pm.pendingRequests[messageID] = time.Now()
+
+	if err := pm.conn.WriteJSON(req); err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to send schedule request: %w", err)
+	}
+
+	resp, err := pm.readResponseWithPushHandling(messageID)
+	if err != nil {
+		delete(pm.pendingRequests, messageID)
+		return fmt.Errorf("failed to read schedule response: %w", err)
+	}
+
+	pm.validateResponse(messageID)
+
+	if resp.Response != "200" {
+		return fmt.Errorf("schedule API request failed with response: %s", resp.Response)
+	}
+
+	for _, obj := range resp.ObjectList {
+		pm.processScheduleObject(obj)
+	}
+
+	return nil
+}
+
+func (pm *PoolMonitor) processScheduleObject(obj ObjectData) {
+	name := obj.Params["SNAME"]
+	if name == "" {
+		name = obj.ObjName
+	}
+
+	act := obj.Params["ACT"]
+	if act == "" {
+		return
+	}
+
+	enabled := 0.0
+	if act == "1" || strings.EqualFold(act, "ON") || strings.EqualFold(act, "TRUE") {
+		enabled = 1.0
+	}
+
+	scheduleEnabled.WithLabelValues(obj.ObjName, name).Set(enabled)
+	pm.logIfNotListeningf("Updated schedule: %s (%s) enabled=%.0f", name, obj.ObjName, enabled)
 }
 
 func (pm *PoolMonitor) getPumpData() error {
@@ -2539,6 +2710,8 @@ func createPrometheusRegistry() *prometheus.Registry {
 	registry.MustRegister(chemSalt)
 	registry.MustRegister(chemQuality)
 	registry.MustRegister(chemAlarm)
+	registry.MustRegister(valvePosition)
+	registry.MustRegister(scheduleEnabled)
 	return registry
 }
 
