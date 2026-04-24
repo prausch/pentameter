@@ -1913,6 +1913,10 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 				ObjName: "INCR",
 				Keys:    []string{"SNAME", "STATUS", "RPM", "PWR", "GPM", "SPEED"},
 			},
+				{
+					ObjName: "PMP02",
+					Keys:     []string{"SNAME", "STATUS", "RPM", "PWR", "GPM", "SPEED", "OBJTYP"},
+				},
 		},
 	}
 
