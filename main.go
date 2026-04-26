@@ -1215,6 +1215,7 @@ func (pm *PoolMonitor) getIntelliChemData() error {
 	}
 
 	for _, obj := range resp.ObjectList {
+		log.Printf("CHEM raw params for %s: %v", obj.ObjName, obj.Params)
 		pm.processIntelliChemObject(obj)
 	}
 
