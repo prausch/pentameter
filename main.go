@@ -2160,7 +2160,9 @@ func (pm *PoolMonitor) attemptRediscovery(ctx context.Context) bool {
 	}
 
 	if discoveredIP == pm.intelliCenterIP {
-		log.Printf("Re-discovery found same IP (%s), connection issue may be temporary", discoveredIP)
+		log.Printf("Re-discovery found same IP (%s), reverting to normal reconnect", discoveredIP)
+		pm.inRediscoveryMode = false
+		pm.consecutiveFailures = 0
 		return false
 	}
 
@@ -2745,14 +2747,16 @@ func main() {
 	monitor := NewPoolMonitor(cfg.intelliCenterIP, cfg.intelliCenterPort, cfg.listenMode)
 	ctx := context.Background()
 
-	if err := monitor.Connect(ctx); err != nil {
-		log.Fatalf("Failed to connect to IntelliCenter: %v", err)
-	}
 	defer func() {
 		if err := monitor.Close(); err != nil {
 			log.Printf("Error closing monitor: %v", err)
 		}
 	}()
+
+	if err := monitor.Connect(ctx); err != nil {
+		log.Printf("Initial connection to IntelliCenter failed: %v — metrics will be empty until reconnected", err)
+		connectionFailure.Set(1)
+	}
 
 	// Start mDNS advertisement so pentameter can be discovered on the network
 	adv, err := StartMDNSAdvertiser(cfg.httpPort, false)
