@@ -2585,11 +2585,12 @@ func createMetricsHandler(registry *prometheus.Registry, _ *PoolMonitor) http.Ha
 }
 
 type appConfig struct {
-	intelliCenterIP   string
-	intelliCenterPort string
-	httpPort          string
-	listenMode        bool
-	pollInterval      time.Duration
+	intelliCenterIP         string
+	intelliCenterPort       string
+	httpPort                string
+	listenMode              bool
+	pollInterval            time.Duration
+	ipExplicitlyConfigured  bool // true when --ic-ip / PENTAMETER_IC_IP was provided
 }
 
 type commandLineFlags struct {
@@ -2682,11 +2683,12 @@ func parseCommandLineFlags() *appConfig {
 	handleEarlyExitFlags(flags)
 
 	return &appConfig{
-		intelliCenterIP:   resolveIntelliCenterIP(*flags.intelliCenterIP),
-		intelliCenterPort: *flags.intelliCenterPort,
-		httpPort:          *flags.httpPort,
-		listenMode:        *flags.listenMode,
-		pollInterval:      determinePollInterval(*flags.pollInterval, *flags.listenMode),
+		intelliCenterIP:        resolveIntelliCenterIP(*flags.intelliCenterIP),
+		intelliCenterPort:      *flags.intelliCenterPort,
+		httpPort:               *flags.httpPort,
+		listenMode:             *flags.listenMode,
+		pollInterval:           determinePollInterval(*flags.pollInterval, *flags.listenMode),
+		ipExplicitlyConfigured: *flags.intelliCenterIP != "",
 	}
 }
 
@@ -2745,6 +2747,11 @@ func main() {
 
 	registry := createPrometheusRegistry()
 	monitor := NewPoolMonitor(cfg.intelliCenterIP, cfg.intelliCenterPort, cfg.listenMode)
+	if cfg.ipExplicitlyConfigured {
+		// mDNS re-discovery cannot find the controller at its configured static IP — skip it
+		// and let EnsureConnected retry the known address directly on each poll tick.
+		monitor.disableAutoRediscovery = true
+	}
 	ctx := context.Background()
 
 	defer func() {
