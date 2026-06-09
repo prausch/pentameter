@@ -304,7 +304,7 @@ echo '{"messageID":"features","command":"GetParamList","condition":"OBJTYP=CIRCU
 **IMPORTANT**: This project uses Fahrenheit for all temperature metrics, not Celsius.
 
 - Pool temperature metrics: `water_temperature_fahrenheit`
-- Air temperature metrics: `air_temperature_fahrenheit`
+- Air temperature metrics: `sensor_temperature_fahrenheit`
 - Grafana dashboards expect Fahrenheit values
 - Pool industry standard is Fahrenheit in the US
 

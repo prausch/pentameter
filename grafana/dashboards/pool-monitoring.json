@@ -199,7 +199,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "air_temperature_fahrenheit",
+          "expr": "sensor_temperature_fahrenheit",
           "interval": "",
           "legendFormat": "{{name}}",
           "refId": "B"

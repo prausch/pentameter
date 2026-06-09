@@ -131,10 +131,10 @@ var (
 		[]string{"body", "name"},
 	)
 
-	airTemperature = prometheus.NewGaugeVec(
+	sensorTemperature = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Name: "air_temperature_fahrenheit",
-			Help: "Current outdoor air temperature in Fahrenheit",
+			Name: "sensor_temperature_fahrenheit",
+			Help: "Current temperature sensor reading in Fahrenheit (sensor label: AIR=outdoor air, SOLAR=solar collector, POOL=pool water return)",
 		},
 		[]string{"sensor", "name"},
 	)
@@ -1101,7 +1101,7 @@ func (pm *PoolMonitor) getAirTemperature() error {
 			}
 
 			// Store temperature in Fahrenheit as per project standard
-			airTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
+			sensorTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
 			pm.trackAirTemp(tempFahrenheit, obj)
 			pm.logIfNotListeningf("Updated air temperature: %s (%s) = %.1f°F (Status: %s)", name, subtype, tempFahrenheit, status)
 		}
@@ -1161,7 +1161,7 @@ func (pm *PoolMonitor) getSensorTemperatures() error {
 				continue
 			}
 
-			airTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
+			sensorTemperature.WithLabelValues(subtype, name).Set(tempFahrenheit)
 			pm.trackAirTemp(tempFahrenheit, obj)
 			pm.logIfNotListeningf("Updated sensor temperature: %s (%s) = %.1f°F (Status: %s)", name, obj.ObjName, tempFahrenheit, status)
 		}
@@ -2705,7 +2705,7 @@ func logStartupMessage(cfg *appConfig) {
 func createPrometheusRegistry() *prometheus.Registry {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(poolTemperature)
-	registry.MustRegister(airTemperature)
+	registry.MustRegister(sensorTemperature)
 	registry.MustRegister(connectionFailure)
 	registry.MustRegister(lastRefreshTimestamp)
 	registry.MustRegister(pumpRPM)

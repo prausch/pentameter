@@ -387,7 +387,7 @@ water_temperature_fahrenheit{body="POOL",name="Pool"} 87
 water_temperature_fahrenheit{body="SPA",name="Spa"} 84
 
 # Air temperature (optional)
-air_temperature_fahrenheit{sensor="AIR",name="Air Sensor"} 73
+sensor_temperature_fahrenheit{sensor="AIR",name="Air Sensor"} 73
 ```
 
 ### Equipment Metrics
@@ -689,7 +689,7 @@ Create custom panels using these queries:
 ```promql
 water_temperature_fahrenheit{body="POOL"}
 water_temperature_fahrenheit{body="SPA"}
-air_temperature_fahrenheit{sensor="AIR"}
+sensor_temperature_fahrenheit{sensor="AIR"}
 intellicenter_connection_failure
 intellicenter_last_refresh_timestamp_seconds
 ```
