@@ -277,25 +277,33 @@ var (
 )
 
 type PoolMonitor struct {
-	lastHealthCheck        time.Time
-	lastRefresh            time.Time
-	conn                   *websocket.Conn
-	bodyHeatingStatus      map[string]bool           // Track which bodies are actively heating
-	referencedHeaters      map[string]BodyHeaterInfo // Track body-to-heater assignments
-	pendingRequests        map[string]time.Time      // Track messageID -> request time
-	featureConfig          map[string]string         // Track feature objnam -> SHOMNU for visibility
-	circuitFreezeConfig    map[string]bool           // Track circuit objnam -> freeze protection enabled
-	circuitNames           map[string]string         // Track circuit/group objnam -> SNAME for display
-	activeCircuitKeys      map[string]bool           // Track active circuit metric keys for stale cleanup
-	activeFeatureKeys      map[string]bool           // Track active feature metric keys for stale cleanup
-	previousState          *EquipmentState           // Previous state for change detection
-	intelliCenterURL       string
-	intelliCenterIP        string // Store IP separately for re-discovery
-	intelliCenterPort      string // Store port for URL reconstruction
-	retryConfig            RetryConfig
-	consecutiveFailures    int        // Track consecutive connection failures for re-discovery
-	failureThreshold       int        // Number of failures before attempting re-discovery
-	mu                     sync.Mutex // Protects concurrent access in listen mode
+	lastHealthCheck     time.Time
+	lastRefresh         time.Time
+	conn                *websocket.Conn
+	bodyHeatingStatus   map[string]bool           // Track which bodies are actively heating
+	referencedHeaters   map[string]BodyHeaterInfo // Track body-to-heater assignments
+	pendingRequests     map[string]time.Time      // Track messageID -> request time
+	featureConfig       map[string]string         // Track feature objnam -> SHOMNU for visibility
+	circuitFreezeConfig map[string]bool           // Track circuit objnam -> freeze protection enabled
+	circuitNames        map[string]string         // Track circuit/group objnam -> SNAME for display
+	bodyObjects         map[string]string         // Track body lookup key (lowercased SNAME and SUBTYP) -> objnam, for control
+	heaterObjects       map[string]string         // Track heater objnam -> SNAME, for control
+	activeCircuitKeys   map[string]bool           // Track active circuit metric keys for stale cleanup
+	activeFeatureKeys   map[string]bool           // Track active feature metric keys for stale cleanup
+	previousState       *EquipmentState           // Previous state for change detection
+	intelliCenterURL    string
+	intelliCenterIP     string // Store IP separately for re-discovery
+	intelliCenterPort   string // Store port for URL reconstruction
+	retryConfig         RetryConfig
+	consecutiveFailures int        // Track consecutive connection failures for re-discovery
+	failureThreshold    int        // Number of failures before attempting re-discovery
+	mu                  sync.Mutex // Protects concurrent access in listen mode
+	// connMu serializes full request/response cycles on pm.conn. The polling loop runs in its
+	// own goroutine while the HTTP server (including /command) serves on another, so without
+	// this two goroutines would interleave WriteJSON/ReadJSON pairs and mis-correlate
+	// messageIDs. Listen mode does not start the HTTP server, so it is unaffected and keeps
+	// using mu as before.
+	connMu                 sync.Mutex
 	connected              bool
 	listenMode             bool // Enable live event logging mode (includes raw JSON output)
 	initialPollDone        bool // Track if initial poll completed (suppresses "detected" logs after first poll)
@@ -364,6 +372,8 @@ func NewPoolMonitor(intelliCenterIP, intelliCenterPort string, listenMode bool) 
 		featureConfig:          make(map[string]string),
 		circuitFreezeConfig:    make(map[string]bool),
 		circuitNames:           make(map[string]string),
+		bodyObjects:            make(map[string]string),
+		heaterObjects:          make(map[string]string),
 		activeCircuitKeys:      make(map[string]bool),
 		activeFeatureKeys:      make(map[string]bool),
 		previousState:          nil,
@@ -973,6 +983,12 @@ func (pm *PoolMonitor) processBodyObject(obj ObjectData, referencedHeaters map[s
 	htsrc := obj.Params["HTSRC"]
 	lotmpStr := obj.Params["LOTMP"]
 	hitmpStr := obj.Params["HITMP"]
+
+	// Record the body objnam unconditionally. processHeaterAssignment below only records a
+	// body when a heater is currently assigned to it (HTSRC != "00000"), so relying on
+	// referencedHeaters for control would lose the write target the moment heat is turned
+	// off — leaving no way to turn it back on.
+	pm.registerBodyObject(name, subtype, obj.ObjName)
 
 	pm.processBodyTemperature(name, tempStr, subtype, status, obj)
 	pm.processBodyHeatingStatus(name, htmodeStr, obj.ObjName)
@@ -1798,6 +1814,10 @@ func (pm *PoolMonitor) processHeaterObject(obj ObjectData) {
 		return
 	}
 
+	// Track every heater seen, so /command can resolve a heat-enable target without the
+	// caller having to know objnams.
+	pm.heaterObjects[obj.ObjName] = name
+
 	var heaterStatusValue int
 	var statusDescription string
 
@@ -2048,6 +2068,9 @@ func (pm *PoolMonitor) StartTemperaturePolling(ctx context.Context, interval tim
 }
 
 func (pm *PoolMonitor) performInitialPolling(ctx context.Context) {
+	pm.connMu.Lock()
+	defer pm.connMu.Unlock()
+
 	if err := pm.EnsureConnected(ctx); err != nil {
 		log.Printf("Failed to establish initial connection: %v", err)
 		return
@@ -2079,6 +2102,9 @@ func (pm *PoolMonitor) runPollingLoop(ctx context.Context, ticker *time.Ticker) 
 }
 
 func (pm *PoolMonitor) handlePollingTick(ctx context.Context) {
+	pm.connMu.Lock()
+	defer pm.connMu.Unlock()
+
 	// Check if we need to enter re-discovery mode (only if auto-discovery is enabled)
 	if !pm.disableAutoRediscovery && !pm.inRediscoveryMode && pm.consecutiveFailures >= pm.failureThreshold {
 		log.Printf("Connection failed %d times, entering re-discovery mode", pm.consecutiveFailures)
@@ -2728,6 +2754,7 @@ func createPrometheusRegistry() *prometheus.Registry {
 
 func setupHTTPEndpoints(registry *prometheus.Registry, monitor *PoolMonitor, httpPort string) {
 	http.Handle("/metrics", createMetricsHandler(registry, monitor))
+	http.HandleFunc("/command", monitor.handleCommand)
 	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte("OK")); err != nil {
