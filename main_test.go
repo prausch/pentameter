@@ -983,7 +983,7 @@ func TestLogPumpUpdate(_ *testing.T) {
 	poolMonitor := NewPoolMonitor("test", "6680", false)
 
 	// Test pump update logging
-	poolMonitor.logPumpUpdate("Test Pump", "PUMP1", 2400, "ON", time.Millisecond)
+	poolMonitor.logPumpUpdate("Test Pump", "PUMP1", "2400", "75", "872", "ON", time.Millisecond)
 }
 
 func TestCloseWithoutConnection(t *testing.T) {
