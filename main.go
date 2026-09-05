@@ -73,14 +73,14 @@ const (
 	trueString = "true"
 
 	// Object type constants.
-	objTypeBody    = "BODY"
-	objTypeCircuit = "CIRCUIT"
-	objTypePump    = "PUMP"
-	objTypeHeater  = "HEATER"
-	objTypeCircGrp = "CIRCGRP"
-	objTypeChem      = "CHEM"
-	objTypeValve        = "VALVE"
-	objTypeSchedule     = "SCHED"
+	objTypeBody     = "BODY"
+	objTypeCircuit  = "CIRCUIT"
+	objTypePump     = "PUMP"
+	objTypeHeater   = "HEATER"
+	objTypeCircGrp  = "CIRCGRP"
+	objTypeChem     = "CHEM"
+	objTypeValve    = "VALVE"
+	objTypeSchedule = "SCHED"
 
 	// Reconnect retry delay.
 	reconnectRetryDelay = 5 * time.Second
@@ -165,16 +165,16 @@ var (
 		prometheus.GaugeOpts{
 			Name: "pump_gpm",
 			Help: "Current pump flow rate in gallons per minute",
-			},
-				[]string{"pump", "name"},
+		},
+		[]string{"pump", "name"},
 	)
 
 	pumpWatts = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "pump_watts",
 			Help: "Current pump power consumption in watts",
-			},
-				[]string{"pump", "name"},
+		},
+		[]string{"pump", "name"},
 	)
 
 	circuitStatus = prometheus.NewGaugeVec(
@@ -223,57 +223,57 @@ var (
 		prometheus.GaugeOpts{
 			Name: "chem_ph",
 			Help: "Current pH level from IntelliChem",
-			 },
-			[]string{"id", "name"},
+		},
+		[]string{"id", "name"},
 	)
 
 	chemORP = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "chem_orp_mv",
 			Help: "Current ORP level in millivolts from IntelliChem",
-			 },
-			[]string{"id", "name"},
+		},
+		[]string{"id", "name"},
 	)
 
 	chemSalt = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "chem_salt_ppm",
 			Help: "Current salt level in PPM from IntelliChem",
-			 },
-			[]string{"id", "name"},
+		},
+		[]string{"id", "name"},
 	)
 
 	chemQuality = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "chem_quality",
 			Help: "Pentair water balance index from IntelliChem",
-			 },
-			[]string{"id", "name"},
+		},
+		[]string{"id", "name"},
 	)
 
 	chemAlarm = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "chem_alarm",
 			Help: "IntelliChem alarm status (0=clear, 1=triggered)",
-			 },
-			[]string{"id", "name", "alarm"},
+		},
+		[]string{"id", "name", "alarm"},
 	)
 
 	valvePosition = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "valve_position",
 			Help: "Valve position (0=A, 1=B)",
-			  },
-				[]string{"id", "name"},
-		)
+		},
+		[]string{"id", "name"},
+	)
 
 	scheduleEnabled = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "schedule_enabled",
 			Help: "Schedule enabled state (0=disabled, 1=enabled)",
-			  },
-				[]string{"id", "name"},
-		)
+		},
+		[]string{"id", "name"},
+	)
 )
 
 type PoolMonitor struct {
@@ -1115,8 +1115,8 @@ func (pm *PoolMonitor) getSensorTemperatures() error {
 
 	req := IntelliCenterRequest{
 		MessageID: messageID,
-		Command:    "GetParamList",
-		Condition:  "",
+		Command:   "GetParamList",
+		Condition: "",
 		ObjectList: []ObjectQuery{
 			{
 				ObjName: "SSS11",
@@ -1185,12 +1185,12 @@ func (pm *PoolMonitor) getIntelliChemData() error {
 
 	req := IntelliCenterRequest{
 		MessageID: messageID,
-		Command:     "GetParamList",
-		Condition:   "OBJTYP=CHEM",
+		Command:   "GetParamList",
+		Condition: "OBJTYP=CHEM",
 		ObjectList: []ObjectQuery{
 			{
 				ObjName: "INCR",
-				Keys:      []string{"SNAME", "STATUS", "PHVAL", "ORPVAL", "SALT", "QUALTY", "PHLO", "PHHI", "ORPLO", "ORPHI", "FLOW", "PROBE"},
+				Keys:    []string{"SNAME", "STATUS", "PHVAL", "ORPVAL", "SALT", "QUALTY", "PHLO", "PHHI", "ORPLO", "ORPHI", "FLOW", "PROBE"},
 			},
 		},
 	}
@@ -1278,14 +1278,14 @@ func (pm *PoolMonitor) getValveData() error {
 
 	req := IntelliCenterRequest{
 		MessageID: messageID,
-		Command:     "GetParamList",
-		Condition:    "OBJTYP=VALVE",
+		Command:   "GetParamList",
+		Condition: "OBJTYP=VALVE",
 		ObjectList: []ObjectQuery{
-				{
+			{
 				ObjName: "INCR",
-				Keys:       []string{"SNAME", "ACT", "STATUS"},
-				},
+				Keys:    []string{"SNAME", "ACT", "STATUS"},
 			},
+		},
 	}
 
 	pm.pendingRequests[messageID] = time.Now()
@@ -1334,8 +1334,8 @@ func (pm *PoolMonitor) processValveObject(obj ObjectData) {
 	} else {
 		if v, err := strconv.ParseFloat(act, 64); err == nil {
 			pos = v
-			}
 		}
+	}
 
 	valvePosition.WithLabelValues(obj.ObjName, name).Set(pos)
 	pm.logIfNotListeningf("Updated valve: %s (%s) position=%s [%.0f]", name, obj.ObjName, act, pos)
@@ -1346,14 +1346,14 @@ func (pm *PoolMonitor) getScheduleData() error {
 
 	req := IntelliCenterRequest{
 		MessageID: messageID,
-		Command:     "GetParamList",
-		Condition:    "OBJTYP=SCHED",
+		Command:   "GetParamList",
+		Condition: "OBJTYP=SCHED",
 		ObjectList: []ObjectQuery{
-				{
+			{
 				ObjName: "INCR",
-				Keys:       []string{"SNAME", "ACT", "STATUS"},
-				},
+				Keys:    []string{"SNAME", "ACT", "STATUS"},
 			},
+		},
 	}
 
 	pm.pendingRequests[messageID] = time.Now()
@@ -1914,10 +1914,10 @@ func (pm *PoolMonitor) requestPumpData() (*IntelliCenterResponse, time.Duration,
 				ObjName: "INCR",
 				Keys:    []string{"SNAME", "STATUS", "RPM", "PWR", "GPM", "SPEED"},
 			},
-				{
-					ObjName: "PMP02",
-					Keys:     []string{"SNAME", "STATUS", "RPM", "PWR", "GPM", "SPEED", "OBJTYP"},
-				},
+			{
+				ObjName: "PMP02",
+				Keys:    []string{"SNAME", "STATUS", "RPM", "PWR", "GPM", "SPEED", "OBJTYP"},
+			},
 		},
 	}
 
@@ -2585,12 +2585,12 @@ func createMetricsHandler(registry *prometheus.Registry, _ *PoolMonitor) http.Ha
 }
 
 type appConfig struct {
-	intelliCenterIP         string
-	intelliCenterPort       string
-	httpPort                string
-	listenMode              bool
-	pollInterval            time.Duration
-	ipExplicitlyConfigured  bool // true when --ic-ip / PENTAMETER_IC_IP was provided
+	intelliCenterIP        string
+	intelliCenterPort      string
+	httpPort               string
+	listenMode             bool
+	pollInterval           time.Duration
+	ipExplicitlyConfigured bool // true when --ic-ip / PENTAMETER_IC_IP was provided
 }
 
 type commandLineFlags struct {
