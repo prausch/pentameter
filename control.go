@@ -369,10 +369,17 @@ func (pm *PoolMonitor) applyHeat(req *CommandRequest) (string, error) {
 		}
 	}
 
-	if err := pm.sendSetParamList(bodyObj, map[string]string{"HTSRC": source}); err != nil {
+	// Write HEATER, not HTSRC. The body carries both, and both report the assigned
+	// heater objnam, but only HEATER is settable: a SetParamList writing HTSRC on
+	// this same object is rejected with response 404 (and no description), while
+	// LOTMP on the same object succeeds — so the controller is refusing that
+	// specific parameter, not the command or the object. HTSRC is the reported
+	// heat source; HEATER is the assignment. Confirmed against the live controller
+	// via GET /debug/params?objtyp=BODY.
+	if err := pm.sendSetParamList(bodyObj, map[string]string{"HEATER": source}); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("body %s heat -> %s (HTSRC=%s)", bodyObj, strings.ToLower(state), source), nil
+	return fmt.Sprintf("body %s heat -> %s (HEATER=%s)", bodyObj, strings.ToLower(state), source), nil
 }
 
 func (pm *PoolMonitor) applySetpoint(req *CommandRequest) (string, error) {
