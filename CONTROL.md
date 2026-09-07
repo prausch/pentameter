@@ -53,8 +53,15 @@ accepts the friendly name (`Pool`), the subtype (`POOL`), or the objnam
 ### Heat is a property of the body, not the heater
 
 The heater object has no on/off of its own. Heat is **enabled** by assigning a
-heater to a body (`HTSRC` = the heater's objnam) and **disabled** by clearing
-that assignment (`HTSRC` = `00000`).
+heater to a body and **disabled** by clearing that assignment (`00000`).
+
+**Write `HEATER`, never `HTSRC`.** The body carries both, and both *report* the
+assigned heater objnam, but only `HEATER` is settable. A `SetParamList` writing
+`HTSRC` is rejected with response `404` and an empty description, while `LOTMP`
+on the same object over the same command succeeds — the controller is refusing
+that specific parameter, not the command or the object. `HTSRC` is the reported
+heat source and follows `HEATER` on its own; verified live, writing
+`HEATER=00000` moved `HTSRC` to `00000` and `HTMODE` from `2` to `0`.
 
 With a single installed heater you can omit the target. With more than one, the
 request is rejected rather than guessed — pass `{"heater": "Solar Heater"}` (or
@@ -106,6 +113,32 @@ curl -sS -X POST "$HOST/command" -H "X-Auth-Token: $TOKEN" \
 curl -sS -X POST "$HOST/command" -H "X-Auth-Token: $TOKEN" \
   -d '{"body": "pool", "setpoint": 82}'
 ```
+
+## `GET /debug/params` — reading the controller raw
+
+Same token as `/command`. Read-only, but it discloses the full equipment layout,
+so it is gated identically.
+
+```bash
+curl -sS "$HOST/debug/params?objtyp=BODY" -H "X-Auth-Token: $TOKEN"
+curl -sS "$HOST/debug/params?objtyp=HEATER&keys=SNAME,STATUS,BODY,SUBTYP" -H "X-Auth-Token: $TOKEN"
+```
+
+`objtyp` is required (`BODY`, `HEATER`, `CIRCUIT`, `PUMP`, …). `keys` is optional
+and defaults to a broad superset; the controller ignores keys an object does not
+have, so over-asking costs nothing.
+
+**Reading the output — the echo convention.** A parameter an object does not have
+is returned with its own name as the value. On a HEATER object, `"HTSRC": "HTSRC"`
+and `"TEMP": "TEMP"` mean *absent*, while `"BODY": "B1101"` and `"STATUS": "ON"`
+are real values. Without this rule the dump looks like it contains far more
+populated fields than it does.
+
+This endpoint exists because the write path had to be reverse-engineered, and a
+rejected `SetParamList` reports only a numeric code (`200` success, `400` bad
+request, `404` unknown command — often with no description at all). Diagnosing by
+trying candidate parameter names against live pool equipment is not acceptable;
+read the object first.
 
 ## Confirming a command took effect
 
