@@ -40,7 +40,7 @@ network boundary is doing most of the work.
 | Action | Body | Writes |
 |---|---|---|
 | Switch a circuit | `{"circuit": "C0006", "state": "off"}` | circuit `STATUS` |
-| Enable/disable heat | `{"body": "pool", "heat": "on"}` | body `HTSRC` |
+| Enable/disable heat | `{"body": "pool", "heat": "on"}` | body `HEATER` (see below — **not** `HTSRC`) |
 | Set heat setpoint | `{"body": "pool", "setpoint": 82}` | body `LOTMP` |
 
 `circuit` accepts either the objnam (`C0006`) or the friendly name pentameter
