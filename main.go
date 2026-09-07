@@ -110,10 +110,14 @@ type ObjectQuery struct {
 }
 
 type IntelliCenterResponse struct {
-	Command    string       `json:"command"`
-	MessageID  string       `json:"messageID"`
-	Response   string       `json:"response"`
-	ObjectList []ObjectData `json:"objectList"`
+	Command   string `json:"command"`
+	MessageID string `json:"messageID"`
+	Response  string `json:"response"`
+	// Description carries the controller's explanation on an error response, e.g.
+	// "'CommandName' Unknown command!". Without it a failure surfaces as a bare
+	// numeric code and the actual cause has to be guessed at.
+	Description string       `json:"description"`
+	ObjectList  []ObjectData `json:"objectList"`
 }
 
 type ObjectData struct {
@@ -2755,6 +2759,7 @@ func createPrometheusRegistry() *prometheus.Registry {
 func setupHTTPEndpoints(registry *prometheus.Registry, monitor *PoolMonitor, httpPort string) {
 	http.Handle("/metrics", createMetricsHandler(registry, monitor))
 	http.HandleFunc("/command", monitor.handleCommand)
+	http.HandleFunc("/debug/params", monitor.handleDebugParams)
 	http.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte("OK")); err != nil {

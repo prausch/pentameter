@@ -189,9 +189,117 @@ func (pm *PoolMonitor) sendSetParamList(objName string, params map[string]string
 	pm.validateResponse(messageID)
 
 	if resp.Response != "200" {
+		// Include the controller's own description. Per the protocol notes in API.md,
+		// 200=success, 400=bad request, 404=unknown command — but the numeric code
+		// alone does not say WHICH command or parameter was not understood, and
+		// guessing at that against live equipment is not acceptable.
+		if resp.Description != "" {
+			return fmt.Errorf("IntelliCenter rejected command: %s (response %s)", resp.Description, resp.Response)
+		}
 		return fmt.Errorf("IntelliCenter rejected command with response %s", resp.Response)
 	}
 	return nil
+}
+
+// handleDebugParams serves GET /debug/params, a read-only raw dump of whatever the
+// controller reports for a given object type. It exists because the write side had
+// to be reverse-engineered: knowing that a SetParamList was rejected is useless
+// without seeing what the object actually looks like and which parameters it holds.
+//
+// Deliberately generic — objtyp and keys are both caller-supplied — so the shape of
+// a question can change without rebuilding and redeploying the container.
+//
+//	GET /debug/params?objtyp=BODY&keys=SNAME,SUBTYP,HTSRC,HTMODE,LOTMP,HITMP
+//
+// Gated by the same token as /command. It is read-only, but it discloses the full
+// equipment layout and should not be more open than the control path.
+func (pm *PoolMonitor) handleDebugParams(w http.ResponseWriter, r *http.Request) {
+	token := getEnvOrDefault(commandTokenEnv, "")
+	if token == "" {
+		http.NotFound(w, r)
+		return
+	}
+	if provided := r.Header.Get("X-Auth-Token"); len(provided) != len(token) || provided != token {
+		writeCommandResponse(w, http.StatusUnauthorized, CommandResponse{
+			Status: "error", Error: "invalid or missing X-Auth-Token",
+		})
+		return
+	}
+
+	objtyp := r.URL.Query().Get("objtyp")
+	if objtyp == "" {
+		writeCommandResponse(w, http.StatusBadRequest, CommandResponse{
+			Status: "error", Error: "objtyp is required (e.g. BODY, HEATER, CIRCUIT)",
+		})
+		return
+	}
+
+	keys := defaultDebugKeys
+	if raw := r.URL.Query().Get("keys"); raw != "" {
+		keys = nil
+		for _, k := range strings.Split(raw, ",") {
+			if k = strings.TrimSpace(k); k != "" {
+				keys = append(keys, k)
+			}
+		}
+	}
+
+	pm.connMu.Lock()
+	resp, err := pm.queryParams(objtyp, keys)
+	pm.connMu.Unlock()
+
+	if err != nil {
+		status := http.StatusBadGateway
+		if errors.Is(err, errNotConnected) {
+			status = http.StatusServiceUnavailable
+		}
+		writeCommandResponse(w, status, CommandResponse{Status: "error", Error: err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		log.Printf("Failed to write debug response: %v", err)
+	}
+}
+
+// defaultDebugKeys is a broad superset covering the parameters seen on bodies,
+// heaters and circuits. The controller ignores keys an object does not have, so
+// over-asking is harmless and saves a round trip of guessing.
+var defaultDebugKeys = []string{
+	"SNAME", "OBJTYP", "SUBTYP", "STATUS", "MODE",
+	"TEMP", "LOTMP", "HITMP", "LSTTMP",
+	"HTMODE", "HTSRC", "HEATER", "BODY",
+	"COOL", "PRIM", "SEC", "ACT", "VOL", "MANUL", "LISTORD", "SHOMNU",
+}
+
+// queryParams runs a GetParamList for one object type. The caller must hold connMu.
+func (pm *PoolMonitor) queryParams(objtyp string, keys []string) (*IntelliCenterResponse, error) {
+	if pm.conn == nil || !pm.connected {
+		return nil, errNotConnected
+	}
+
+	messageID := fmt.Sprintf("debug-%d-%d", time.Now().Unix(), time.Now().Nanosecond()%nanosecondMod)
+	req := IntelliCenterRequest{
+		MessageID:  messageID,
+		Command:    "GetParamList",
+		Condition:  "OBJTYP=" + objtyp,
+		ObjectList: []ObjectQuery{{ObjName: "INCR", Keys: keys}},
+	}
+
+	pm.pendingRequests[messageID] = time.Now()
+	if err := pm.conn.WriteJSON(req); err != nil {
+		delete(pm.pendingRequests, messageID)
+		return nil, fmt.Errorf("failed to send debug query: %w", err)
+	}
+
+	resp, err := pm.readResponseWithPushHandling(messageID)
+	if err != nil {
+		delete(pm.pendingRequests, messageID)
+		return nil, fmt.Errorf("failed to read debug response: %w", err)
+	}
+	pm.validateResponse(messageID)
+	return resp, nil
 }
 
 // applyCommand validates a request and performs exactly one action. The caller must hold

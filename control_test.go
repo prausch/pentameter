@@ -382,3 +382,58 @@ func TestSortedKeysIsStable(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleDebugParamsDisabledWithoutToken(t *testing.T) {
+	t.Setenv(commandTokenEnv, "")
+	pm := newControlMonitor()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/debug/params?objtyp=BODY", nil)
+	pm.handleDebugParams(rec, req)
+
+	// Read-only, but it discloses the full equipment layout — same gate as /command.
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestHandleDebugParamsRequiresToken(t *testing.T) {
+	t.Setenv(commandTokenEnv, "s3cret")
+	pm := newControlMonitor()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/debug/params?objtyp=BODY", nil)
+	pm.handleDebugParams(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestHandleDebugParamsRequiresObjtyp(t *testing.T) {
+	t.Setenv(commandTokenEnv, "s3cret")
+	pm := newControlMonitor()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/debug/params", nil)
+	req.Header.Set("X-Auth-Token", "s3cret")
+	pm.handleDebugParams(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestHandleDebugParamsDisconnected(t *testing.T) {
+	t.Setenv(commandTokenEnv, "s3cret")
+	pm := newControlMonitor()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/debug/params?objtyp=BODY", nil)
+	req.Header.Set("X-Auth-Token", "s3cret")
+	pm.handleDebugParams(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusServiceUnavailable)
+	}
+}
